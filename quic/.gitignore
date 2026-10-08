@@ -1,0 +1,8 @@
+# binarios, headers descargados y certificado (se generan con instalar_msquic.sh)
+broker_quic
+publisher_quic
+subscriber_quic
+include/
+server.cert
+server.key
+*.log
