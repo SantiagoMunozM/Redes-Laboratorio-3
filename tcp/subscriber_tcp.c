@@ -10,20 +10,8 @@
 #define PORT 8080
 #define SA struct sockaddr  // alias para struct sockaddr
 #define MAX_MENSAJE 512
-#define NUM_EVENTOS 10
-
-const char* eventos[NUM_EVENTOS] = {
-    "Inicio del partido",
-    "Tarjeta amarilla al numero 10 de Equipo B al minuto 12",
-    "Gol de Equipo A al minuto 32",
-    "Cambio: jugador 10 entra por jugador 20 en Equipo B",
-    "Fin del primer tiempo: Equipo A 1 - 0 Equipo B",
-    "Gol de Equipo B al minuto 58",
-    "Tarjeta roja al numero 4 de Equipo A al minuto 67",
-    "Gol de Equipo A al minuto 81",
-    "Cambio: jugador 7 entra por jugador 11 en Equipo A",
-    "Final del partido: Equipo A 2 - 1 Equipo B"
-};
+#define MAX_BUFFER 1024
+#define MAX_PARTIDOS 10
 
 /*
  * Envia una linea al broker agregandole el '\n'
@@ -54,18 +42,16 @@ int enviar_linea(int descriptor_socket, const char *mensaje)
         //usamos la funcion send de la libreria sys/socket.h para enviar el mensaje al broker
         //esta funcion envia datos a un socket y devuelve el numero de bytes enviados (-1 si error)
         //la funcion recibe cuatro parametros:
-        // el descriptor del socket del publicador conectado al broker, para saber a que socket enviar
+        // el descriptor del socket del subscriber conectado al broker, para saber a que socket enviar
         // un puntero al buffer que contiene los datos a enviar (linea+enviados, primer byte no enviado)
         // el tamanio del buffer (n - enviados)
         // un entero que indica las opciones de la funcion (0 para comportamiento por defecto)
-        int r =send(descriptor_socket, linea + enviados, n - enviados, 0);
+        int r = send(descriptor_socket, linea + enviados, n - enviados, 0);
 
         //el retorno de send es el numero de bytes que se enviaron, si es negativo hubo un error y retornamos -1
-        //el error ya no termina el programa, pues usamos signal(SIGPIPE, SIG_IGN) para ignorar la señal SIGPIPE y usamos
-        //la siguiente verificacion para capturar el error de send cuando llega la señal SIGPIPE
         if (r < 0)
             return -1;
-        
+
         //si no fue negativo agregamos los bytes enviados al contador
         enviados += r;
     }
@@ -73,96 +59,86 @@ int enviar_linea(int descriptor_socket, const char *mensaje)
 }
 
 /*
- * Modo automatico: envia los 10 eventos de ejemplo
- * del partido, uno por segundo.
+ * Recibe las noticias que reenvia el broker y las
+ * imprime, una por linea. Termina cuando el broker
+ * cierra la conexion.
  */
-void modo_automatico(int descriptor_socket, const char *partido)
+void recibir_noticias(int descriptor_socket)
 {
-    //declarar arreglo del mensaje
-    char mensaje[MAX_MENSAJE];
+    char buffer[MAX_BUFFER];
+    int longitud = 0;
 
-    //ciclo para los eventos a enviar
-    for (int i = 0; i < NUM_EVENTOS; i++) {
-        //formateamos el mensaje a enviar al broker
-        snprintf(mensaje, sizeof(mensaje), "%s|[%02d] %s", partido, i + 1, eventos[i]);
-
-        //intentamos enviar la linea al broker, si hay error notificamos y salimos de la funcion
-        if (enviar_linea(descriptor_socket, mensaje) < 0) {
-            printf("Error al enviar el mensaje, el broker cerro la conexion\n");
+    for (;;) {
+        //para leer del socket usamos la funcion recv de la libreria sys/socket.h
+        //esta funcion extrae datos del socket y los almacena en un buffer, y devuelve el numero de bytes leidos (-1 si error)
+        //la funcion recibe cuatro parametros:
+        // el descriptor del socket del subscriber conectado al broker, para saber de que socket leer
+        // un puntero al buffer donde se almacenaran los datos leidos (buffer + longitud apunta al primer byte libre del buffer)
+        // el espacio restante en el buffer (MAX_BUFFER - longitud - 1) - evita sobrepasar el limite del buffer
+        // un entero que indica las opciones de la funcion (0 para comportamiento por defecto)
+        int n = recv(descriptor_socket, buffer + longitud, MAX_BUFFER - longitud - 1, 0);
+        //si el resultado de recv es 0 o negativo, el broker cerro la conexion o hubo un error, salimos de la funcion
+        if (n <= 0) {
+            printf("El broker cerro la conexion\n");
             return;
         }
-        printf("Enviado %d/%d: %s\n", i + 1, NUM_EVENTOS, mensaje);
 
-        //esperamos un segundo antes de enviar el siguiente evento
-        sleep(1);
-    }
-    printf("Los %d eventos fueron enviados\n", NUM_EVENTOS);
-}
+        //agregamos los bytes leidos a la longitud del buffer y agregamos un terminador nulo al final
+        longitud += n;
+        buffer[longitud] = '\0';
 
-/*
- * Modo manual: cada linea escrita por el periodista
- * es un evento. Termina al escribir "exit" o con Ctrl+D.
- */
-void modo_manual(int descriptor_socket, const char *partido)
-{
-    //arreglo que guardara el texto escrito en consola
-    char texto[MAX_MENSAJE - 60];
+        //ahora queremos extraer las lineas completas del buffer, una linea completa se termina con \n
+        //fin sera un puntero que apunta al primer \n encontrado en el buffer, si no hay \n, fin sera NULL
+        char *fin;
+        //para encontrar el primer \n en el buffer usamos la funcion strchr de la libreria string.h
+        //mientras haya un \n en el buffer (fin != NULL), hay lineas completas que queremos procesar     
+        while ((fin = strchr(buffer, '\n')) != NULL) {
+            //reemplazamos el \n por un terminador nulo para que la linea sea una cadena de caracteres valida
+            *fin = '\0';
+            printf("Noticia recibida: %s\n", buffer);
 
-    //arreglo que guardara el mensaje a enviar al broker, incluyendo el partido y el texto
-    char mensaje[MAX_MENSAJE];
-
-    printf("Escriba un evento por linea ('exit' para terminar):\n");
-    //usando la funcion fgets de la libreria stdio.h leemos una linea de texto por entrada estandar y la almacenamos en el arreglo texto
-    //fgets lee como maximo el tamanio de texto - 1, el resto queda pendiente en el buffer de entrada estandar
-    //el ciclo se repite mientras la funcion no retorne NULL, lo que indica que se llego al final de la entrada (Ctrl+D) o hubo un error
-    while (fgets(texto, sizeof(texto), stdin) != NULL) {
-        //reemplazamos el salto de linea al final de la cadena por un terminador nulo para que sea una cadena valida
-        texto[strcspn(texto, "\n")] = '\0';
-
-        //si el texto es "exit", salimos del ciclo y terminamos la funcion
-        if (strcmp(texto, "exit") == 0)
-            break;
-        //si el texto es vacio, no hacemos nada y seguimos al siguiente ciclo
-        if (texto[0] == '\0')
-            continue;
-        
-        //formateamos el mensaje a enviar al broker, agregando el partido y el texto del evento
-        snprintf(mensaje, sizeof(mensaje), "%s|%s", partido, texto);
-
-        //enviamos el mensaje al broker, si hay error notificamos y salimos de la funcion
-        if (enviar_linea(descriptor_socket, mensaje) < 0) {
-            printf("Error al enviar el mensaje, el broker cerro la conexion\n");
+            //calculamos cuantos bytes quedan en el buffer despues de la linea procesada
+            int restante = longitud - (int)(fin + 1 - buffer);
+            //usamos la funcion memmove para mover los bytes restantes al inicio del buffer, sobrescribiendo la linea procesada
+            //la funcion recibe tres parametros:
+                // un puntero al destino (buffer)
+                // un puntero al origen (fin + 1, que apunta al primer byte despues del \n)
+                // el numero de bytes a mover (restante)
+            memmove(buffer, fin + 1, restante);
+            //actualizamos la longitud del buffer y agregamos un terminador nulo al final
+            longitud = restante;
+            buffer[longitud] = '\0';
+        }
+        //si el buffer del cliente esta lleno y no hay un \n el mensaje es demasiado largo, notificamos y terminamos el programa
+        if (longitud >= MAX_BUFFER - 1) {
+            printf("Mensaje demasiado largo\n");
             return;
         }
-        printf("Enviado: %s\n", mensaje);
     }
 }
 
 /*
- * Se conecta al broker, se registra como PUBLISHER
- * y publica los eventos del partido indicado.
+ * Se conecta al broker, se suscribe a los partidos
+ * indicados y muestra las noticias que le reenvia.
  *
- * Uso: ./publisher_tcp <partido> [auto|manual]
+ * Uso: ./subscriber_tcp <partido1> [partido2 ...]
  */
 int main(int argc, char *argv[])
 {
     //verificamos uso correcto de argumentos
-    if (argc < 2) {
-        printf("Uso: %s <partido> [auto|manual]\n", argv[0]);
-        printf("Ejemplo: %s ColombiaVsBrasil auto\n", argv[0]);
+    if (argc < 2 || argc - 1 > MAX_PARTIDOS) {
+        printf("Uso: %s <partido1> [partido2 ...] (maximo %d partidos)\n", argv[0], MAX_PARTIDOS);
+        printf("Ejemplo: %s ColombiaVsBrasil ArgentinaVsChile\n", argv[0]);
         return 1;
     }
 
-    //obtenemos el partido y el modo de publicacion
-    const char *partido = argv[1];
-    int modo_manual_activo = (argc >= 3 && strcmp(argv[2], "manual") == 0);
-
-
-    //usando la funcion strchr de la libreria string.h rechazamos si el partido contiene un '|' 
-    //usando la funcion strlen de la libreria string.h rechazamos si el partido tiene mas de 49 caracteres o es vacio
-    if (strchr(partido, '|') != NULL || strlen(partido) > 49 || strlen(partido) == 0) {
-        printf("Partido invalido: no puede tener '|' ni mas de 49 caracteres\n");
-        return 1;
+    for (int i = 1; i < argc; i++) {
+        //usando la funcion strchr de la libreria string.h rechazamos si el partido contiene un '|'
+        //usando la funcion strlen de la libreria string.h rechazamos si el partido tiene mas de 49 caracteres o es vacio
+        if (strchr(argv[i], '|') != NULL || strlen(argv[i]) > 49 || strlen(argv[i]) == 0) {
+            printf("Partido invalido: no puede tener '|' ni mas de 49 caracteres\n");
+            return 1;
+        }
     }
 
     int descriptor_socket; // descriptor del socket del cliente
@@ -175,10 +151,10 @@ int main(int argc, char *argv[])
     // sin_addr: direccion IP del host
     struct sockaddr_in direccion_servidor;
 
-    //signal es una funcion de la libreria signal.h que evita que el publisher deje
+    //signal es una funcion de la libreria signal.h que evita que el subscriber deje
     //de funcionar cuando reciba una señal SIGPIPE. Se declara al comienzo y es valido durante toda la ejecucion.
-    //una señal SIGPIPE se genera cuando el publisher intenta escribir en un socket que
-    //ha sido cerrado por el servidor y que el publisher no ha detectado.
+    //una señal SIGPIPE se genera cuando el subscriber intenta escribir en un socket que
+    //ha sido cerrado por el servidor y que el subscriber no ha detectado.
     signal(SIGPIPE, SIG_IGN);
 
     // crear el socket
@@ -238,21 +214,26 @@ int main(int argc, char *argv[])
         close(descriptor_socket);
         exit(0);
     }
+    
+    //revisa los partidos indicados en los argumentos, envia un mensaje de suscripcion al broker por cada uno
+    for (int i = 1; i < argc; i++) {
+        char registro[MAX_MENSAJE];
 
-    //una vez conectado, nos registramos como publicador enviando la cadena "PUBLISHER" al broker
-    if (enviar_linea(descriptor_socket, "PUBLISHER") < 0) {
-        //si hubo error al enviar, cerramos el socket y salimos del programa
-        printf("Error al registrarse como publisher\n");
-        close(descriptor_socket);
-        return 1;
+        //usamos la funcion snprintf de la libreria stdio.h para formatear el mensaje de suscripcion al broker
+        //la funcion nos permite copiar el contenido del i-esimo partido en el buffer y agregarle el prefijo de reconocimiento de suscriptor
+        //asi, el mensaje tiene el formato correcto para el broker
+        snprintf(registro, sizeof(registro), "SUBSCRIBER|%s", argv[i]);
+
+        //enviamos el mensaje de suscripcion al broker, revisamos si hay error y notificamos y salimos si es asi
+        if (enviar_linea(descriptor_socket, registro) < 0) {
+            printf("Error al suscribirse al partido %s\n", argv[i]);
+            close(descriptor_socket);
+            return 1;
+        }
+        printf("Suscrito al partido %s\n", argv[i]);
     }
-    printf("Registrado como PUBLISHER del partido %s\n", partido);
 
-    //dependiendo del modo de publicacion, llamamos a la funcion correspondiente
-    if (modo_manual_activo)
-        modo_manual(descriptor_socket, partido);
-    else
-        modo_automatico(descriptor_socket, partido);
+    recibir_noticias(descriptor_socket);
 
     close(descriptor_socket);
     return 0;
