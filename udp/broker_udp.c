@@ -4,7 +4,6 @@
 #include <string.h>  // funciones para manipular cadenas
 #include <strings.h> // bzero()
 #include <sys/socket.h> // libreria principal para los sockets
-#include <unistd.h> // read(), write(), close()
 #define PORT 8080 // puerto del servidor
 #define SA struct sockaddr  // alias para struct sockaddr
 #define MAX_SUSCRIPTORES 50 // maximo numero de suscriptores registrados
@@ -33,6 +32,8 @@ struct Suscriptor suscriptores[MAX_SUSCRIPTORES];
  */
 int buscar_suscriptor(struct sockaddr_in *origen)
 {
+    //recorremos el arreglo de suscriptores para encontrar al suscriptor con la direccion y puerto dados
+    //ademas, verifica que el suscriptor este activo.
     for (int i = 0; i < MAX_SUSCRIPTORES; i++) {
         if (suscriptores[i].activo &&
             suscriptores[i].direccion.sin_addr.s_addr == origen->sin_addr.s_addr &&
@@ -68,24 +69,29 @@ void registrar_suscriptor(struct sockaddr_in *origen, char *linea)
     char partido[50];
 
     //usamos la funcion sscanf de la libreria stdio.h para extraer el partido del mensaje
+    //esta nos permite revisar si el texto del partido sigue el formato esperado (menos de 50 caracteres y sin el caracter '|')
     if (sscanf(linea + 11, "%49[^|]", partido) != 1) {
         //el mensaje no trae un partido, el registro es invalido
         printf("Registro invalido: %s\n", linea);
         return;
     }
 
+    //buscamos si el suscriptor ya esta registrado
     int i = buscar_suscriptor(origen);
 
     if (i == -1) {
         //es un suscriptor nuevo, buscamos el primer cupo libre
         for (i = 0; i < MAX_SUSCRIPTORES; i++) {
+            //si encontramos uno inactivo, lo usamos para el nuevo suscriptor
             if (!suscriptores[i].activo)
                 break;
         }
         if (i == MAX_SUSCRIPTORES) {
+            //si no hay cupos libres, rechaza el registro
             printf("Broker lleno, registro rechazado\n");
             return;
         }
+        //registrar la informacion del nuevo suscriptor en su estructura
         suscriptores[i].direccion = *origen;
         suscriptores[i].activo = 1;
         suscriptores[i].num_partidos = 0;
@@ -118,17 +124,31 @@ void reenviar_noticia(int descriptor_socket, char *mensaje, int longitud)
 {
     char partido[50];
 
-    //revisamos que el partido este en el formato esperado, que es "PARTIDO|MENSAJE"
+    //usamos la funcion sscanf de la libreria stdio.h para saber si el mensaje tiene el formato correcto para el envio (tiene por lo menos un caracter antes de |).
     if (sscanf(mensaje, "%49[^|]", partido) != 1)
         return;
 
     //contador de suscriptores a los que se reenvio el mensaje
     int enviados = 0;
 
+    //recorremos todos los suscriptores
     for (int j = 0; j < MAX_SUSCRIPTORES; j++) {
+        //enviamos solo a los suscriptores que esten activos y suscritos al partido
         if (suscriptores[j].activo && esta_suscrito(j, partido)) {
+
+            //para enviar el mensaje, usamos la funcion sendto de la libreria sys/socket.h
+            //la cual nos permite enviar un datagrama a una direccion IP y puerto ingresados por parametro
+            //la funcion recibe los siguientes parametros:
+            // descriptor del socket, para saber a que socket enviar el mensaje (descriptor_socket)
+            // puntero al mensaje a enviar (mensaje)
+            // longitud del mensaje a enviar (longitud)
+            // flags, que en este caso es 0, indicando que no se usan banderas 
+            // puntero a la direccion del suscriptor al que se le enviara el mensaje (posicion en el arreglo)
+            // tamanio de la estructura de direccion del suscriptor (tamanio de la estructura en el arreglo)
             sendto(descriptor_socket, mensaje, longitud, 0,
                    (SA*)&suscriptores[j].direccion, sizeof(suscriptores[j].direccion));
+            
+            //incrementamos contador para saber a cuantos suscriptores se ha enviado el mensaje
             enviados++;
         }
     }
@@ -145,13 +165,13 @@ void reenviar_noticia(int descriptor_socket, char *mensaje, int longitud)
  */
 int main()
 {
-    int descriptor_socket; // oido del socket del servidor
+    int descriptor_socket; // descriptor del servidor
 
     // variables que almacenan las direcciones del servidor y del cliente
     // se utiliza la estructura sockaddr_in, especifica para direcciones IPv4 de la libreria netinet/in.h
     //esta estructura contiene los siguientes campos:
     // sin_family: familia de direcciones, AF_INET para IPv4
-    // sin_port: puerto de la conexion
+    // sin_port: puerto
     // sin_addr: direccion IP del host
     struct sockaddr_in direccion_servidor;
     struct sockaddr_in direccion_cliente;
@@ -168,11 +188,13 @@ int main()
     //y nos devuelve un descriptor que representa el socket.
     //Los parametros usados cumplen la siguiente funcion:
     // AF_INET: indica que se usara el protocolo IPv4 (familia de direcciones)
-    // 0: indica usar el protocolo por defecto para la combinacion de protocolo IP y tipo de flujo.
+    // SOCK_DGRAM: indica que se usara un socket de tipo datagrama 
+    // 0: indica usar el protocolo por defecto para la combinacion de protocolo IP y tipo de socket. (con datagramas e IPv4, UDP)
     descriptor_socket = socket(AF_INET, SOCK_DGRAM, 0);
 
     //si el descriptor es -1, significa que hubo un error al crear el socket
     if (descriptor_socket == -1) {
+        //si hubo error al crear el socket, terminamos el programa y mostramos mensaje de error
         printf("Error al crear el socket\n");
         exit(0);
     }
@@ -181,15 +203,15 @@ int main()
 
     //activamos la opcion SO_REUSEADDR para el socket, asi cuando el broker se cierra y se
     //vuelve a abrir, el puerto no queda bloqueado
+    //para esto usamos la funcion setsockopt de la libreria sys/socket.h
     int option_socket = 1;
     setsockopt(descriptor_socket, SOL_SOCKET, SO_REUSEADDR, &option_socket, sizeof(option_socket));
 
-    //una vez creado el socket, usamos la funcion bzero de la libreria string.h para inicializar la
+    //una vez creado el socket, usamos la funcion bzero de la libreria strings.h para inicializar la
     //estructura de direccion del servidor en 0s
     bzero(&direccion_servidor, sizeof(direccion_servidor));
 
-    //una vez creado el socket, replicamos su configuracion para la estructura
-    //direccion_servidor,
+    //una vez creado el socket, replicamos su configuracion para la estructura de direccion_servidor
 
     //declaramos la familia de direcciones
     direccion_servidor.sin_family = AF_INET;
@@ -197,7 +219,7 @@ int main()
     //asignamos la direccion IP del servidor
     //sin_addr es una estructura que contiene la direccion IP del servidor
     //s_addr es el campo de la estructura sin_addr que contiene la direccion IP en formato binario
-    //INADDR_ANY indica que el servidor aceptara conexiones de cualquier direccion IP disponible en la maquina
+    //INADDR_ANY indica que el servidor aceptara datagramas de cualquier direccion IP disponible en la maquina
     //htonl convierte la direccion IP de formato de host a formato de red
     direccion_servidor.sin_addr.s_addr = htonl(INADDR_ANY);
 
@@ -218,19 +240,36 @@ int main()
     }
 
     else {
+        //si hubo error al asociar, terminamos el programa y mostramos mensaje de error
         printf("Error al asociar el socket\n");
         exit(0);
     }
 
     printf("Broker UDP esperando datagramas..\n");
 
+    //declaramos el buffer de recepcion de datagramas
     char buffer[MAX_BUFFER];
 
+    //bucle infinito para recibir datagramas de forma continua
     for (;;) {
+        //inicializamos la longitud de direccion del cliente
         socklen_t longitud_direccion_cliente = sizeof(direccion_cliente);
 
+        //dada la simplicidad de UDP, podemos recibir datagramas de forma sencilla mediante la
+        //funcion recvfrom de la libreria sys/socket.h. La funcion espera que llegue un datagrama 
+        //al socket, lo copia en el buffer y devuelve la cantidad de bytes recibidos. En el proceso, bloquea el programa
+        //hasta que llegue un datagrama
+        //esta funcion recibe los siguientes parametros:
+        // descriptor del socket, para saber de que socket recibir el datagrama (descriptor_socket)
+        // puntero al buffer donde se almacenara el datagrama recibido (buffer)
+        // tamanio del buffer (MAX_BUFFER - 1)
+        // flags, que en este caso es 0, indicando que no se usan banderas
+        // puntero a la estructura de direccion del cliente que envio el datagrama (direccion_cliente)
+        // puntero a la longitud de la estructura de direccion del cliente (longitud_direccion_cliente, es modificado por la funcion con el tamanio real de la estructura)
         int n = recvfrom(descriptor_socket, buffer, MAX_BUFFER - 1, 0,
                          (SA*)&direccion_cliente, &longitud_direccion_cliente);
+
+        //si el valor retornado por recvfrom es negativo, hubo error en la transferencia.
         if (n < 0) {
             printf("Error al recibir el datagrama\n");
             continue;
@@ -238,14 +277,18 @@ int main()
 
         //agregamos un terminador nulo al final del buffer para saber hasta donde llega el mensaje recibido
         buffer[n] = '\0';
-
+        //evaluamos el contenido del mensaje para saber si se trata de un registro de suscriptor, publicador o una noticia
+        //usamos la funcion strncmp de la libreria string.h para comparar el inicio del mensaje con el formato para cada accion
         if (strncmp(buffer, "SUBSCRIBER|", 11) == 0) {
+            //formato para registrar un suscriptor: SUBSCRIBER|PARTIDO
             registrar_suscriptor(&direccion_cliente, buffer);
         }
         else if (strncmp(buffer, "PUBLISHER|", 10) == 0) {
+            //formato para registrar un publicador: PUBLISHER|NOMBRE
             printf("Publisher registrado: %s\n", buffer + 10);
         }
         else {
+            //formato para enviar una noticia: PARTIDO|MENSAJE
             reenviar_noticia(descriptor_socket, buffer, n);
         }
     }

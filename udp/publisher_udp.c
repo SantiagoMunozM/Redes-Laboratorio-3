@@ -6,11 +6,12 @@
 #include <strings.h> // bzero()
 #include <sys/socket.h> // libreria principal para los sockets
 #include <unistd.h> // read(), write(), close()
-#define PORT 8080
+#define PORT 8080 // puerto del broker
 #define SA struct sockaddr  // alias para struct sockaddr
-#define MAX_MENSAJE 512
-#define NUM_EVENTOS 10
+#define MAX_MENSAJE 512 //maximo tamanio del mensaje a enviar al broker
+#define NUM_EVENTOS 10 //numero de eventos automaticos de ejemplo
 
+//arreglo con eventos de ejemplo para pruebas automaticas
 const char* eventos[NUM_EVENTOS] = {
     "Inicio del partido",
     "Tarjeta amarilla al numero 10 de Equipo B al minuto 12",
@@ -31,6 +32,17 @@ const char* eventos[NUM_EVENTOS] = {
  */
 int enviar_datagrama(int descriptor_socket, struct sockaddr_in *direccion_servidor, const char *mensaje)
 {
+    //para enviar el mensaje, usamos la funcion sendto de la libreria sys/socket.h
+    //la cual nos permite enviar un datagrama a una direccion IP y puerto ingresados por parametro
+    //la funcion recibe los siguientes parametros:
+    // descriptor del socket, para saber por que socket enviar el mensaje (descriptor_socket)
+    // puntero al mensaje a enviar (mensaje)
+    // longitud del mensaje a enviar, calculada con strlen de la libreria string.h (strlen(mensaje))
+    // flags, que en este caso es 0, indicando que no se usan banderas
+    // puntero a la direccion del broker al que se le enviara el mensaje (direccion_servidor)
+    // tamanio de la estructura de direccion del broker (sizeof(*direccion_servidor))
+    //sendto retorna la cantidad de bytes enviados o -1 si hubo error. Que retorne con exito solo significa
+    //que el sistema operativo acepto el datagrama, no que el broker lo haya recibido (UDP no confirma la entrega)
     if (sendto(descriptor_socket, mensaje, strlen(mensaje), 0,
                (SA*)direccion_servidor, sizeof(*direccion_servidor)) < 0)
         return -1;
@@ -48,7 +60,8 @@ void modo_automatico(int descriptor_socket, struct sockaddr_in *direccion_servid
 
     //ciclo para los eventos a enviar
     for (int i = 0; i < NUM_EVENTOS; i++) {
-        //formateamos el mensaje a enviar al broker
+        //formateamos el mensaje a enviar al broker usando la funcion snprintf de la libreria stdio.h
+        //esta funcion nos permite copiar el contenido del mensaje deseado en el buffer y agregarle el prefijo del partido y el numero de evento
         snprintf(mensaje, sizeof(mensaje), "%s|[%02d] %s", partido, i + 1, eventos[i]);
 
         //intentamos enviar el mensaje al broker, si hay error notificamos y salimos de la funcion
@@ -71,6 +84,7 @@ void modo_automatico(int descriptor_socket, struct sockaddr_in *direccion_servid
 void modo_manual(int descriptor_socket, struct sockaddr_in *direccion_servidor, const char *partido)
 {
     //arreglo que guardara el texto escrito en consola
+    //su tamanio es 60 menos que el maximo para 49 caracteres del partido como maximo, y un margen para el numero de evento y el separador '|'
     char texto[MAX_MENSAJE - 60];
 
     //arreglo que guardara el mensaje a enviar al broker, incluyendo el partido y el texto
@@ -82,6 +96,7 @@ void modo_manual(int descriptor_socket, struct sockaddr_in *direccion_servidor, 
     //el ciclo se repite mientras la funcion no retorne NULL, lo que indica que se llego al final de la entrada (Ctrl+D) o hubo un error
     while (fgets(texto, sizeof(texto), stdin) != NULL) {
         //reemplazamos el salto de linea al final de la cadena por un terminador nulo para que sea una cadena valida
+        //para esto usamos la funcion strcspn de la libreria string.h, que nos devuelve el indice del primer caracter que coincide con el segundo argumento (en este caso '\n')
         texto[strcspn(texto, "\n")] = '\0';
 
         //si el texto es "exit", salimos del ciclo y terminamos la funcion
@@ -91,7 +106,8 @@ void modo_manual(int descriptor_socket, struct sockaddr_in *direccion_servidor, 
         if (texto[0] == '\0')
             continue;
 
-        //formateamos el mensaje a enviar al broker, agregando el partido y el texto del evento
+        //formateamos el mensaje a enviar al broker usando la funcion snprintf de la libreria stdio.h
+        //esta funcion nos permite copiar el contenido del mensaje deseado en el buffer y agregarle el prefijo del partido
         snprintf(mensaje, sizeof(mensaje), "%s|%s", partido, texto);
 
         //enviamos el mensaje al broker, si hay error notificamos y salimos de la funcion
@@ -120,6 +136,7 @@ int main(int argc, char *argv[])
 
     //obtenemos el partido y el modo de publicacion
     const char *partido = argv[1];
+    //revisa si hay tres argumentos y si el tercero es manual, para almacenar el valor correcto en modo_manual_activo
     int modo_manual_activo = (argc >= 3 && strcmp(argv[2], "manual") == 0);
 
 
@@ -136,7 +153,7 @@ int main(int argc, char *argv[])
     // se utiliza la estructura sockaddr_in, especifica para direcciones IPv4 de la libreria netinet/in.h
     //esta estructura contiene los siguientes campos:
     // sin_family: familia de direcciones, AF_INET para IPv4
-    // sin_port: puerto de la conexion
+    // sin_port: puerto del socket
     // sin_addr: direccion IP del host
     struct sockaddr_in direccion_servidor;
 
@@ -146,11 +163,13 @@ int main(int argc, char *argv[])
     //y nos devuelve un descriptor que representa el socket.
     //Los parametros usados cumplen la siguiente funcion:
     // AF_INET: indica que se usara el protocolo IPv4 (familia de direcciones)
-    // 0: indica usar el protocolo por defecto para la combinacion de protocolo IP y tipo de flujo.
+    // SOCK_DGRAM: indica que se usara un socket de tipo datagrama
+    // 0: indica usar el protocolo por defecto para la combinacion de protocolo IP y tipo de socket.
     descriptor_socket = socket(AF_INET, SOCK_DGRAM, 0);
 
     //si el descriptor es -1, significa que hubo un error al crear el socket
     if (descriptor_socket == -1) {
+        //si hubo error al crear el socket, terminamos el programa y mostramos mensaje de error
         printf("Error al crear el socket\n");
         exit(0);
     }
@@ -178,6 +197,9 @@ int main(int argc, char *argv[])
     //htons convierte el puerto de formato de host a formato de red
     direccion_servidor.sin_port = htons(PORT);
 
+    //a diferencia del broker, el publisher no usa bind: el sistema operativo le asigna un puerto
+    //libre automaticamente la primera vez que se envia un datagrama con sendto
+
     //nos registramos como publicador enviando "PUBLISHER|partido" al broker
     char registro[MAX_MENSAJE];
     snprintf(registro, sizeof(registro), "PUBLISHER|%s", partido);
@@ -195,6 +217,8 @@ int main(int argc, char *argv[])
     else
         modo_automatico(descriptor_socket, &direccion_servidor, partido);
 
+    //usando la funcion close de la libreria unistd.h cerramos el socket, liberando el descriptor y el puerto asignado
+    //al terminar de publicar los eventos, el programa termina con codigo 0 (ejecucion exitosa)
     close(descriptor_socket);
     return 0;
 }
