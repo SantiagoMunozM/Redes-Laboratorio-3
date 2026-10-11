@@ -121,18 +121,27 @@ void recibir_noticias(int descriptor_socket)
  * Se conecta al broker, se suscribe a los partidos
  * indicados y muestra las noticias que le reenvia.
  *
- * Uso: ./subscriber_tcp <partido1> [partido2 ...]
+ * Uso: ./subscriber_tcp <ip_broker> <partido1> [partido2 ...]
  */
 int main(int argc, char *argv[])
 {
     //verificamos uso correcto de argumentos
-    if (argc < 2 || argc - 1 > MAX_PARTIDOS) {
-        printf("Uso: %s <partido1> [partido2 ...] (maximo %d partidos)\n", argv[0], MAX_PARTIDOS);
-        printf("Ejemplo: %s ColombiaVsBrasil ArgentinaVsChile\n", argv[0]);
+    if (argc < 3 || argc - 2 > MAX_PARTIDOS) {
+        printf("Uso: %s <ip_broker> <partido1> [partido2 ...] (maximo %d partidos)\n", argv[0], MAX_PARTIDOS);
+        printf("Ejemplo: %s 192.168.1.20 ColombiaVsBrasil ArgentinaVsChile\n", argv[0]);
         return 1;
     }
 
-    for (int i = 1; i < argc; i++) {
+    //obtenemos la IP del broker; los partidos empiezan en el segundo argumento
+    const char *ip_broker = argv[1];
+
+    //inet_addr devuelve INADDR_NONE cuando el texto recibido no es una direccion IPv4 valida
+    if (inet_addr(ip_broker) == INADDR_NONE) {
+        printf("IP del broker invalida: %s\n", ip_broker);
+        return 1;
+    }
+
+    for (int i = 2; i < argc; i++) {
         //usando la funcion strchr de la libreria string.h rechazamos si el partido contiene un '|'
         //usando la funcion strlen de la libreria string.h rechazamos si el partido tiene mas de 49 caracteres o es vacio
         if (strchr(argv[i], '|') != NULL || strlen(argv[i]) > 49 || strlen(argv[i]) == 0) {
@@ -189,8 +198,9 @@ int main(int argc, char *argv[])
     //asignamos la direccion IP del servidor
     //sin_addr es una estructura que contiene la direccion IP del servidor
     //s_addr es el campo de la estructura sin_addr que contiene la direccion IP en formato binario
-    //inet_addr convierte la direccion IP escrita como texto ("127.0.0.1", localhost) a formato binario
-    direccion_servidor.sin_addr.s_addr = inet_addr("127.0.0.1");
+    //ip_broker es la IP del broker recibida como primer argumento (127.0.0.1 si corre en esta misma maquina)
+    //inet_addr convierte la direccion IP escrita como texto (por ejemplo "192.168.1.20") a formato binario
+    direccion_servidor.sin_addr.s_addr = inet_addr(ip_broker);
 
     //asignamos el puerto del servidor
     //htons convierte el puerto de formato de host a formato de red
@@ -216,7 +226,7 @@ int main(int argc, char *argv[])
     }
     
     //revisa los partidos indicados en los argumentos, envia un mensaje de suscripcion al broker por cada uno
-    for (int i = 1; i < argc; i++) {
+    for (int i = 2; i < argc; i++) {
         char registro[MAX_MENSAJE];
 
         //usamos la funcion snprintf de la libreria stdio.h para formatear el mensaje de suscripcion al broker
