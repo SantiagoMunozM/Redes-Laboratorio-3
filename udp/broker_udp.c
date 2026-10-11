@@ -188,8 +188,8 @@ int main()
     //y nos devuelve un descriptor que representa el socket.
     //Los parametros usados cumplen la siguiente funcion:
     // AF_INET: indica que se usara el protocolo IPv4 (familia de direcciones)
-    // SOCK_DGRAM: indica que se usara un socket de tipo datagrama 
-    // 0: indica usar el protocolo por defecto para la combinacion de protocolo IP y tipo de socket. (con datagramas e IPv4, UDP)
+    // SOCK_DGRAM: indica que se usara un socket de tipo datagrama (tipo de socket para UDP)
+    // 0: indica usar el protocolo por defecto para la combinacion de protocolo IP y tipo de socket. 
     descriptor_socket = socket(AF_INET, SOCK_DGRAM, 0);
 
     //si el descriptor es -1, significa que hubo un error al crear el socket
@@ -264,7 +264,7 @@ int main()
         // puntero al buffer donde se almacenara el datagrama recibido (buffer)
         // tamanio del buffer (MAX_BUFFER - 1)
         // flags, que en este caso es 0, indicando que no se usan banderas
-        // puntero a la estructura de direccion del cliente que envio el datagrama (direccion_cliente)
+        // puntero a la estructura de direccion del cliente que envio el datagrama (direccion_cliente
         // puntero a la longitud de la estructura de direccion del cliente (longitud_direccion_cliente, es modificado por la funcion con el tamanio real de la estructura)
         int n = recvfrom(descriptor_socket, buffer, MAX_BUFFER - 1, 0,
                          (SA*)&direccion_cliente, &longitud_direccion_cliente);

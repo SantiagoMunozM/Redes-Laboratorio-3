@@ -211,13 +211,10 @@ void leer_cliente(int num_cliente)
         liberar_cliente(num_cliente);
         return;
     }
-
     //redefinimos la longitud del buffer
-
     cliente->longitud += n;
     //agregamos un terminador nulo al final del buffer para saber hasta donde llega el mensaje recibido
     cliente->buffer[cliente->longitud] = '\0';
-
 
     //ahora queremos extraer las lineas completas del buffer, una linea completa se termina con \n
     //fin sera un puntero que apunta al primer \n encontrado en el buffer, si no hay \n, fin sera NULL
